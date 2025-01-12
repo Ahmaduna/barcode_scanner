@@ -2,49 +2,76 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Scanner de Code-Barres</title>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/quagga/0.12.1/quagga.min.js"></script>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Scanner un QR Code</title>
+    <!-- Script HTML5 QR Code -->
+    <script src="https://unpkg.com/html5-qrcode/minified/html5-qrcode.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            text-align: center;
+            margin: 0;
+            padding: 20px;
+        }
+        #qr-reader {
+            width: 100%;
+            max-width: 500px;
+            margin: 20px auto;
+        }
+        #result {
+            margin-top: 20px;
+            font-size: 18px;
+            color: #333;
+        }
+    </style>
 </head>
 <body>
-    <h1>Scanner un Code-Barres</h1>
-    <div id="scanner" style="width: 100%; height: 300px;"></div>
-    <p id="result">Scannez un code-barres pour voir les détails.</p>
+    <h1>Scanner un QR Code</h1>
+    <p>Scannez un QR code pour voir le type de déchet :</p>
+    <div id="qr-reader"></div>
+    <div id="result">Aucun code scanné pour l'instant.</div>
 
     <script>
-        Quagga.init({
-            inputStream: {
-                name: "Live",
-                type: "LiveStream",
-                target: document.querySelector('#scanner'),
-            },
-            decoder: {
-                readers: ["ean_reader"]  // Lecture des codes-barres EAN
-            }
-        }, function(err) {
-            if (err) {
-                console.log(err);
-                return;
-            }
-            Quagga.start();
-        });
-
-        Quagga.onDetected(function(data) {
-            const barcode = data.codeResult.code;
-            fetch(`/scan/${barcode}/`)
+        // Fonction appelée lorsque le QR code est scanné avec succès
+        const qrCodeSuccessCallback = (decodedText, decodedResult) => {
+            document.getElementById("result").innerText = `Code scanné : ${decodedText}`;
+            
+            // Appel au backend pour obtenir des informations
+            fetch(`/scan/${decodedText}/`)
                 .then(response => response.json())
-                .then(result => {
-                    if (result.error) {
-                        document.getElementById("result").innerText = `Erreur : ${result.error}`;
+                .then(data => {
+                    if (data.error) {
+                        document.getElementById("result").innerText = `Erreur : ${data.error}`;
                     } else {
                         document.getElementById("result").innerText = `
-                            Produit : ${result.name} 
-                            Catégorie : ${result.category} 
-                            Marque : ${result.brand} 
-                            Type de recyclage : ${result.recycling_type}
+                            Produit : ${data.name}\n
+                            Catégorie : ${data.category}\n
+                            Type de déchet : ${data.recycling_type}
                         `;
                     }
                 })
-                .catch(error => console.error('Erreur:', error));
+                .catch(error => {
+                    document.getElementById("result").innerText = "Erreur lors de la requête.";
+                });
+        };
+
+        // Fonction appelée en cas d'erreur
+        const qrCodeErrorCallback = (errorMessage) => {
+            console.warn(errorMessage);
+        };
+
+        // Démarrer le lecteur QR code
+        const html5QrCode = new Html5Qrcode("qr-reader");
+        html5QrCode.start(
+            { facingMode: "environment" }, // Utiliser la caméra arrière
+            {
+                fps: 10, // Fréquence d'analyse (frames per second)
+                qrbox: 250 // Zone d'analyse
+            },
+            qrCodeSuccessCallback,
+            qrCodeErrorCallback
+        ).catch((err) => {
+            document.getElementById("result").innerText = "Erreur lors du démarrage de la caméra.";
         });
     </script>
 </body>
