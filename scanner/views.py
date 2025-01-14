@@ -1,8 +1,10 @@
+from django.views.decorators.csrf import csrf_exempt
 from django.shortcuts import render
-import requests
 from django.http import JsonResponse
-from .models import Product
+from .models import Product, UserScore
+import requests
 import logging
+import json
 
 logger = logging.getLogger(__name__)
 
@@ -16,7 +18,6 @@ def map_category_to_recycling_type(category, packaging=""):
     category = category.lower()
     packaging = packaging.lower()
 
-    # Recyclables (emballages, papier/carton)
     if any(keyword in category + packaging for keyword in [
         "plastique", "carton", "papier", "emballage", "bouteille", "canette", "alu", "aluminium",
         "plastic", "cardboard", "paper", "packaging", "bottle", "can", "aluminum",
@@ -24,39 +25,29 @@ def map_category_to_recycling_type(category, packaging=""):
         "fr:carton plastique"
     ]):
         return "Recyclables"
-
-    # Compost (déchets organiques)
     elif any(keyword in category + packaging for keyword in [
         "organique", "alimentaire", "compost", "déchet de cuisine", "fruits", "légumes", "épluchures",
         "organic", "food waste", "compostable", "kitchen waste", "fruits", "vegetables", "peelings",
         "fr:compost", "fr:épluchures", "fr:organique"
     ]):
         return "Compost"
-
-    # Verre
     elif any(keyword in category + packaging for keyword in [
         "verre", "bocal", "bouteille en verre", "pot",
         "glass", "jar", "glass bottle", "container", "film", "wrapper",
         "fr:bocal", "fr:film", "fr:verre", "fr:pot"
     ]):
         return "Verre"
-
-    # Métal
     elif any(keyword in category + packaging for keyword in [
         "metal", "can", "drink can", "canned", "steel-can", "fr:canette métal recyclabbe à l'infini",
         "fr:cannette aluminium", "fr:boîte métal à recycler", "fr:boîte en métal"
     ]):
         return "Métal"
-
-    # Ordures ménagères
     elif any(keyword in category + packaging for keyword in [
         "ordures ménagères", "non recyclable", "déchet général", "restes",
         "household waste", "non-recyclable", "general waste", "leftovers",
         "fr:non recyclable", "fr:restes", "fr:ordures ménagères"
     ]):
         return "Ordures ménagères"
-
-    # Déchets spéciaux (piles, électronique)
     elif any(keyword in category + packaging for keyword in [
         "pile", "batterie", "électronique", "électroménager", "téléphone", "ordinateur", "déchet dangereux",
         "battery", "electronics", "appliance", "phone", "computer", "hazardous waste",
@@ -64,53 +55,43 @@ def map_category_to_recycling_type(category, packaging=""):
     ]):
         return "Déchets spéciaux"
 
-    # Par défaut, catégorie inconnue
     return "Autre"
 
-def fetch_from_openfoodfacts(barcode):
+def map_recycling_type_to_bin_color(recycling_type):
     """
-    Appelle l'API OpenFoodFacts pour obtenir des données sur un produit.
+    Mappe le type de déchet à une couleur de poubelle.
     """
-    api_url = f"https://world.openfoodfacts.org/api/v0/product/{barcode}.json"
-    response = requests.get(api_url)
-
-    if response.status_code == 200:
-        data = response.json()
-        if data.get('status') == 1:  # Produit trouvé
-            product = data['product']
-            return {
-                'name': product.get('product_name', "Nom indisponible"),
-                'category': product.get('categories', "Catégorie indisponible"),
-                'brand': product.get('brands', "Marque indisponible"),
-                'image_url': product.get('image_url', ""),
-                'packaging': product.get('packaging', "")  # Utiliser pour la catégorisation
-            }
-    return None
-
-def fetch_from_barcodelookup(barcode):
-    """
-    Appelle l'API Barcode Lookup pour obtenir des données sur un produit.
-    """
-    api_url = f"https://api.barcodelookup.com/v3/products?barcode={barcode}&key={BARCODE_LOOKUP_API_KEY}"
-    response = requests.get(api_url)
-
-    if response.status_code == 200:
-        data = response.json()
-        if data.get('products'):
-            product_data = data['products'][0]
-            return {
-                'name': product_data.get("product_name", "Nom indisponible"),
-                'category': product_data.get("category", "Catégorie indisponible"),
-                'brand': product_data.get("brand", "Marque indisponible"),
-                'image_url': product_data.get("images", [""])[0]
-            }
-    return None
-
-def scan_page(request):
-    """
-    Vue pour rendre la page HTML avec l'interface de scan.
-    """
-    return render(request, 'scanner/scan.html')
+    bin_colors = {
+        "Verre": {
+            "color": "Verte",
+            "rappel": "Le verre va dans la poubelle verte. Pas de bouchons ni couvercles."
+        },
+        "Recyclables": {
+            "color": "Jaune",
+            "rappel": "Plastique, carton et papier vont dans la poubelle jaune."
+        },
+        "Compost": {
+            "color": "Compost",
+            "rappel": "Les déchets organiques vont au compost."
+        },
+        "Métal": {
+            "color": "Jaune",
+            "rappel": "Le métal va dans la poubelle jaune."
+        },
+        "Ordures ménagères": {
+            "color": "Grise/Noire",
+            "rappel": "Les déchets non recyclables vont dans la poubelle grise ou noire."
+        },
+        "Déchets spéciaux": {
+            "color": "Spéciale",
+            "rappel": "Les déchets dangereux nécessitent un traitement particulier."
+        },
+        "Autre": {
+            "color": "Grise/Noire",
+            "rappel": "Catégorie inconnue. Veuillez vérifier localement."
+        },
+    }
+    return bin_colors.get(recycling_type, bin_colors["Autre"])
 
 def scan_barcode(request, barcode):
     """
@@ -121,57 +102,33 @@ def scan_barcode(request, barcode):
     # Vérifier si le produit existe déjà dans la base locale
     try:
         product = Product.objects.get(barcode=barcode)
-        return JsonResponse({
-            'name': product.name,
-            'category': product.category,
-            'brand': product.brand,
-            'image_url': product.image_url,
-            'recycling_type': product.recycling_type
-        })
+        recycling_type = product.recycling_type
     except Product.DoesNotExist:
-        pass
+        product_data = fetch_from_openfoodfacts(barcode) or fetch_from_barcodelookup(barcode)
+        if not product_data:
+            return JsonResponse({'error': 'Produit non trouvé.'}, status=404)
 
-    # Rechercher d'abord dans OpenFoodFacts
-    product_data = fetch_from_openfoodfacts(barcode)
-    if product_data:
         recycling_type = map_category_to_recycling_type(
             product_data.get("category", ""),
             product_data.get("packaging", "")
         )
-        product = Product.objects.create(
+        Product.objects.create(
             barcode=barcode,
-            name=product_data.get("name"),
-            category=product_data.get("category"),
-            brand=product_data.get("brand"),
-            image_url=product_data.get("image_url"),
-            recycling_type=recycling_type
+            name=product_data.get("name", "Nom indisponible"),
+            category=product_data.get("category", ""),
+            brand=product_data.get("brand", ""),
+            image_url=product_data.get("image_url", ""),
+            recycling_type=recycling_type,
         )
-        return JsonResponse({
-            'name': product.name,
-            'category': product.category,
-            'brand': product.brand,
-            'image_url': product.image_url,
-            'recycling_type': product.recycling_type
-        })
 
-    # Si non trouvé, chercher dans Barcode Lookup
-    product_data = fetch_from_barcodelookup(barcode)
-    if product_data:
-        recycling_type = map_category_to_recycling_type(product_data.get("category", ""))
-        product = Product.objects.create(
-            barcode=barcode,
-            name=product_data.get("name"),
-            category=product_data.get("category"),
-            brand=product_data.get("brand"),
-            image_url=product_data.get("image_url"),
-            recycling_type=recycling_type
-        )
-        return JsonResponse({
-            'name': product.name,
-            'category': product.category,
-            'brand': product.brand,
-            'image_url': product.image_url,
-            'recycling_type': product.recycling_type
-        })
-
-    return JsonResponse({'error': 'Produit non trouvé dans aucune API'}, status=404)
+    bin_info = map_recycling_type_to_bin_color(recycling_type)
+    return JsonResponse({
+        "recycling_type": recycling_type,
+        "bin_color": bin_info["color"],
+        "rappel": bin_info["rappel"],
+    })
+def scan_page(request):
+    """
+    Vue pour afficher la page de scan.
+    """
+    return render(request, 'scanner/scan.html')
